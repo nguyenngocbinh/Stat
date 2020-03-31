@@ -1,0 +1,128 @@
+---
+title: "COMPARE FEATURE TRANSFORMATION"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{COMPARE_FEATURE_TRANSFORMATION}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+# TL;DR (Too Long; Didn’t Read)
+
+## Log Transformer
+
+- Helps with skewness
+- No predetermined range for scaled data
+- Useful only on non-zero, non-negative data
+
+## Min-Max Scaler
+
+- Rescales to predetermined range [0–1]
+- Doesn’t change distribution’s center (doesn’t correct skewness)
+- Sensitive to outliers
+
+## Max Abs Scaler
+
+- Rescales to predetermined range [-1–1]
+- Doesn’t change distribution’s center
+- Sensitive to outliers
+
+## Standard Scaler
+
+- Shifts distribution’s mean to 0 & unit variance
+- No predetermined range
+- Best to use on data that is approximately normally distributed
+
+## Robust Scaler
+
+- 0 mean & unit variance
+- Use of quartile ranges makes this less sensitive to (a few) outliers
+- No predetermined range
+
+## Power Transformer
+
+- Helps correct skewness
+- 0 mean & unit variance
+- No predetermined range
+- Yeo-Johnson or Box-Cox
+- Box-Cox can only be used on non-negative data
+
+SOURCE: https://medium.com/@sjacks/feature-transformation-21282d1a3215
+
+# ILLUSTRATION
+
+## Log Transformer
+
+$$ X' = log(X) $$
+
+## Min-Max Scaler
+
+$$ X' = \frac{X - X{min}}{X{max} - X{min}} $$
+
+## Max Absolute Scaler
+
+$$ X' = \frac{X}{max(abs(X))} $$
+
+## Standard Scaler
+
+$$ X' = \frac{X - \mu}{\sigma}  $$
+
+## Robust Scaler
+
+$$ X' = \frac{X - Q_1(X)}{Q_3(X) - Q_1(X)}$$
+
+- Q1: the 1st quartile (25th quantile) and Q3: the 3rd quartile (75th quantile)
+
+## Power Transformer
+
+$$ x(\lambda) = \{^{\frac{x^\lambda - 1}{\lambda}, \space if \space \lambda \ne 0 }_{log(x), \space if \space \lambda = 0}  $$
+
+## Data using
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(bestNormalize)
+
+df <- scorecard::germancredit
+
+df <- df %>% 
+  mutate(amt__original = credit.amount,
+         amt_log = log(credit.amount),
+         amt_min_max = (credit.amount - min(credit.amount))/(max(credit.amount) - min(credit.amount)),
+         amt_max_abs = credit.amount / max(abs(credit.amount)),
+         amt_standard = (credit.amount - mean(credit.amount)) / sd(credit.amount),
+         amt_robust = (credit.amount - quantile(credit.amount, 1/4)) / (quantile(credit.amount, 3/4) - quantile(credit.amount, 1/4)),
+         amt_power = bestNormalize(credit.amount) %>% predict()
+         )
+
+```
+
+```{r, warning=FALSE, fig.height=7, fig.width=7}
+p <- df %>% 
+  select(starts_with("amt")) %>% 
+  tidyr::pivot_longer(cols = starts_with("amt")) %>% 
+  ggplot(aes(x = value, fill = name, color = name))+
+  geom_histogram()+
+  scale_color_ipsum() +
+  scale_fill_ipsum() +
+  facet_wrap(~name, scales = "free", ncol = 3)+
+    labs(title = "Compare feature transformation",
+       x = NULL,
+       y = NULL)+
+  theme_ipsum_ps(grid="XY", axis="xy") +
+  theme(legend.position="none")
+  
+p  
+```
