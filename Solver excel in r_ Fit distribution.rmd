@@ -1,0 +1,188 @@
+---
+title: "Solver excel in R, a small practice: Fit distribution"
+author: "NNB"
+date: "20-sep-2021"
+output:
+  html_document: 
+    code_download: true
+    code_folding: show
+    number_sections: yes
+    theme: "default"
+    toc: TRUE
+    toc_float: TRUE
+    dev: 'svg'
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse, warn.conflicts = F, quietly = T)
+```
+
+# Giới thiệu
+
+Excel có 2 công cụ tuyệt vời là solver và goal seek. Với những dự án nhỏ, hoặc dữ liệu nhỏ, mô hình ít thì 2 công cụ này cũng đủ dùng. Nhưng khi dữ liệu nhiều, số lượng mô hình tăng, excel không còn phù hợp. Có nhiều công cụ thay thế excel giải quyết những vẫn đề này, trong đó có R là 1 công cụ rất mạnh.
+
+# Thực hành 
+
+Trong phần này tôi sử dụng hàm `optim` của gói stats. Các bước như sau:
+
+Bước 1: Viết hàm sử dụng cho mục đích tối ưu, tìm min hoặc max của 1 object
+
+Bước 2: Sử dụng hàm `optim` để tìm tham số phù hợp
+
+## Bước 1
+
+Viết hàm tìm tham số phù hợp với dạng phân phối.
+
+Đầu vào bao gồm:
+
+- param: Tham số sẽ được tối ưu
+- actual_pd: Xác suất vỡ nợ thực tế
+- formula: dạng hàm phân phối
+
+```{r}
+#' @title Optimze every formula
+#' @param param list or vector contains list of parameters
+#' @param actual_pd vector
+#' @param formula text type
+#' @example fnc_optimize(c(1,1,1), c(0.1, 0.3, 0.4, 0.9), 'dgamma(x = x, shape = a, scale = b) * scalar')
+fnc_optimize <- function(param, actual_pd, formula){
+  stopifnot(length(actual_pd) >= 1)
+  x <- 1:length(actual_pd)
+  a <- param[1]
+  b <- param[2]
+  scalar <- param[3]
+  fitted_pd <- eval(parse(text = formula)) 
+  sse <- sum((actual_pd - fitted_pd)^2)
+  return(sse)
+}
+
+```
+
+Ví dụ sử dụng phân phối gamma để fit
+
+```{r}
+gamma_formula <- 'dgamma(x = x, shape = a, scale = b) * scalar'
+pd <- c(0.1, 0.3, 0.4, 0.9)
+res <- optim(c(1, 1, 1), fnc_optimize, actual_pd = pd, formula = gamma_formula)
+res
+```
+
+Đầu ra có 2 giá trị quan trọng nhất cần quan tâm:
+
+- $par: là các tham số đã được tối ưu
+- $value: là giá trị nhỏ nhất sau khi đã tối ưu
+
+## Bước 2
+
+- Xuất các tham số đã được tối ưu 
+- Dự báo giá trị xác suất cho các kỳ tiếp theo
+
+```{r}
+#' @title Export parameters and pitpd
+#' @param period_len length of period will predicted
+#' @example fnc_predict_pitpd(period_len = 10, actual_pd = c(0.1, 0.3, 0.4, 0.9), formula = 'dgamma(x=x, shape=a, scale=b)*scalar')
+fnc_predict_pitpd <- function(period_len, actual_pd, formula) {
+  res <- optim(c(1, 1, 1), fnc_optimize, actual_pd = actual_pd, formula = formula)
+  a <- res$par[1]
+  b <- res$par[2]
+  scalar <- res$par[3]
+  x <- seq(period_len)
+  pred <- eval(parse(text = formula))
+  sse <- res$value
+  return(data.frame(a = a,
+                    b = b,
+                    scalar = scalar,
+                    sse = sse,
+                    period = t(pred)))
+}
+```
+
+Ví dụ: dự báo cho 10 kỳ
+
+```{r}
+fnc_predict_pitpd(period_len = 10, actual_pd = pd, formula = gamma_formula) %>% 
+  t() %>% 
+  knitr::kable()
+```
+
+
+## Bước 3
+
+Viết vòng lặp cho 5 loại phân phối và danh sách các giá trị pd
+
+
+```{r}
+#' @title Scale pit pd
+#' @param period_len length of period will predicted
+#' @param input_pd data.frame with columns are actual_pd  
+#' @param input_formula list formual to optimize
+#' @example fnc_predict_pitpd_five_formula(20, input_pd = cohort_fit_distribution)
+fnc_predict_pitpd_five_formula <-
+  function(period_len, input_pd) {
+    # list formula to fit
+    list_formula <- 
+      list(
+        gamma = 'dgamma(x = x, shape = a, scale = b) * scalar',
+        cauchy = 'scalar/(pi*a*(1+((x-b)/a)^2))',
+        exponential = 'a*exp(-a*x)*scalar',
+        loglogit = 'scalar*(a/b)*(x/b)^(a-1)/(1+(x/b)^a)^2',
+        lognorm = 'scalar*dlnorm(x, a, b)'
+      )
+    
+    # list object to loop (same name with ...)
+    ll <- cross(list(actual_pd = input_pd, formula = list_formula)) %>%
+      transpose()
+    
+    # id name
+    cname <- cross2(names(input_pd), names(list_formula)) %>% 
+      transpose() %>% 
+      pmap_dfr(data.frame) %>% 
+      set_names(c('Segment', 'Distribution'))
+    
+    pred <- ll %>%
+      pmap_dfr(fnc_predict_pitpd,
+           period_len = period_len,
+           .id = 'id')
+    
+    out <- cname %>% bind_cols(pred)
+    
+    return(out)
+  }
+```
+
+## Bước 4
+
+Thực hành với dữ liệu: Đầu vào là dữ liệu PD thực tế theo năm của từng danh mục
+
+```{r,echo=FALSE}
+
+cohort_fit_distribution <- readxl::read_excel("D:/tpb/ifrs9/pd lifetime/data/cohort_fit_distribution.xlsx") %>%  
+  column_to_rownames("Segment") %>% 
+  t() %>% 
+  as.data.frame()
+
+df <- cohort_fit_distribution %>% 
+  select(Autoloan_G1, CC_G1, Mortage_G5)
+```
+
+- Mẫu dữ liệu
+```{r}
+head(df)
+```
+
+- Fit với 5 dạng phân phối và dự báo cho 10 kỳ 
+
+```{r}
+tictoc::tic()
+output <- fnc_predict_pitpd_five_formula(10, input_pd = df)
+tictoc::toc()
+```
+Kết quả
+```{r}
+output %>% 
+  knitr::kable()
+```
+
